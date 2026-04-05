@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Japón Compacto — Import Logistics Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy: { 50:'#f0f4fa', 100:'#d9e4f5', 600:'#2a5298', 700:'#1e3d7a', 800:'#1a3260', 900:'#0f1e3d' },
+            steel: { 400:'#7a9aba', 500:'#5a82a5', 600:'#4a6d8c' },
+            gold: { 400:'#d4a843', 500:'#c9a030' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    input[type=range] { -webkit-appearance: none; height: 6px; border-radius: 3px; background: #d1d5db; outline: none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #2a5298; cursor: pointer; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+    .fade-in { animation: fadeIn .3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// ── SVG LOGO ──────────────────────────────────────────────────────────────────
+function Logo({ size = 48 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="lg1" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#7ab0cc"/>
+          <stop offset="100%" stopColor="#4a7fa5"/>
+        </linearGradient>
+        <linearGradient id="lg2" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#c8d8e8"/>
+          <stop offset="50%" stopColor="#a0b8cc"/>
+          <stop offset="100%" stopColor="#7090a8"/>
+        </linearGradient>
+      </defs>
+      {/* Outer arc */}
+      <path d="M100 20 A80 80 0 1 1 99.9 20" stroke="url(#lg1)" strokeWidth="8" fill="none" strokeLinecap="round"/>
+      {/* Middle arc */}
+      <path d="M60 40 A60 60 0 0 1 155 120" stroke="url(#lg1)" strokeWidth="6" fill="none" strokeLinecap="round" opacity="0.75"/>
+      {/* Inner arc */}
+      <path d="M70 60 A45 45 0 0 1 140 130" stroke="url(#lg1)" strokeWidth="5" fill="none" strokeLinecap="round" opacity="0.55"/>
+      {/* Excavator arm - boom */}
+      <path d="M95 85 L125 60 L145 68 L130 95 Z" fill="url(#lg2)" stroke="#8ab0c8" strokeWidth="1.5"/>
+      {/* Stick */}
+      <path d="M130 95 L150 110 L140 125 L120 108 Z" fill="url(#lg2)" stroke="#8ab0c8" strokeWidth="1.5"/>
+      {/* Bucket */}
+      <path d="M140 120 L158 112 L164 128 L148 140 L136 132 Z" fill="url(#lg2)" stroke="#8ab0c8" strokeWidth="1.5"/>
+      <path d="M148 140 Q152 148 158 143 L164 128" stroke="#8ab0c8" strokeWidth="2" fill="none"/>
+      {/* Cylinder detail */}
+      <line x1="128" y1="78" x2="136" y2="100" stroke="#c8dce8" strokeWidth="2.5" strokeLinecap="round"/>
+    </svg>
+  );
+}
+
+// ── CONSTANTS ──────────────────────────────────────────────────────────────────
+const DESTINATIONS = [
+  { id: 'queretaro', label: 'Querétaro',    km: 850,  risk: 'medium', freightBase: 1100 },
+  { id: 'puebla',    label: 'Puebla',       km: 960,  risk: 'medium', freightBase: 1250 },
+  { id: 'edomex',    label: 'Edo. de Méx.', km: 1020, risk: 'high',   freightBase: 1380 },
+  { id: 'cdmx',      label: 'CDMX',         km: 1040, risk: 'high',   freightBase: 1420 },
+  { id: 'qroo',      label: 'Quintana Roo', km: 1880, risk: 'high',   freightBase: 2600 },
+];
+
+const MOCK_AUCTION_PRICE   = 24000;  // USD per excavator
+const OCEAN_FREIGHT_PER_CONTAINER = 3800; // USD flat
+const CUSTOMS_RATE         = 0.05;   // IGI 5%
+const IVA_RATE             = 0.16;
+const DTA_RATE             = 0.00008;
+const BROKER_FEE           = 450;
+const PORT_HANDLING        = 380;
+const ESCORT_BASE          = 2200;   // armed escort per container
+const INSURANCE_RATE       = 0.012;  // 1.2% of declared value
+
+const RISK_COLORS = {
+  low:    { bg: 'bg-emerald-50', border: 'border-emerald-300', text: 'text-emerald-700', dot: 'bg-emerald-500', label: 'Low Risk' },
+  medium: { bg: 'bg-amber-50',   border: 'border-amber-300',   text: 'text-amber-700',   dot: 'bg-amber-500',   label: 'Medium Risk' },
+  high:   { bg: 'bg-red-50',     border: 'border-red-300',     text: 'text-red-700',     dot: 'bg-red-500',     label: 'High Risk' },
+};
+
+// ── UTILS ──────────────────────────────────────────────────────────────────────
+const fmt = (n) => '$' + Math.round(n).toLocaleString('en-US');
+const fmtK = (n) => '$' + (n / 1000).toFixed(1) + 'K';
+
+// ── MAIN DASHBOARD ─────────────────────────────────────────────────────────────
+function Dashboard() {
+  const [containers,  setContainers]  = useState(5);
+  const [excsPerCont, setExcsPerCont] = useState(3);
+  const [destId,      setDestId]      = useState('cdmx');
+  const [security,    setSecurity]    = useState('B');
+
+  const dest = DESTINATIONS.find(d => d.id === destId);
+  const totalExcavators = containers * excsPerCont;
+
+  const costs = useMemo(() => {
+    const auctionTotal   = totalExcavators * MOCK_AUCTION_PRICE;
+    const oceanTotal     = containers * OCEAN_FREIGHT_PER_CONTAINER;
+    const cifValue       = auctionTotal + oceanTotal;
+    const igi            = cifValue * CUSTOMS_RATE;
+    const iva            = (cifValue + igi) * IVA_RATE;  // creditable
+    const dta            = cifValue * DTA_RATE;
+    const brokerTotal    = BROKER_FEE * containers;
+    const portTotal      = PORT_HANDLING * containers;
+    const freightTotal   = dest.freightBase * containers;
+
+    const securityCost   = security === 'A'
+      ? ESCORT_BASE * containers
+      : cifValue * INSURANCE_RATE;
+
+    const landedPerUnit  = (auctionTotal + oceanTotal + igi + dta + brokerTotal + portTotal + freightTotal + securityCost) / totalExcavators;
+    const totalBeforeIva = auctionTotal + oceanTotal + igi + dta + brokerTotal + portTotal + freightTotal + securityCost;
+
+    return { auctionTotal, oceanTotal, cifValue, igi, iva, dta, brokerTotal, portTotal, freightTotal, securityCost, landedPerUnit, totalBeforeIva };
+  }, [containers, excsPerCont, totalExcavators, dest, security]);
+
+  const riskStyle = RISK_COLORS[dest.risk];
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* ── NAVBAR ── */}
+      <nav className="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Logo size={44}/>
+            <div>
+              <div className="text-white font-extrabold text-lg tracking-tight leading-tight">
+                Japón<span className="text-amber-400">Compacto</span>
+              </div>
+              <div className="text-slate-400 text-xs font-medium tracking-widest uppercase">Import Logistics Dashboard</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <a href="index.html" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">🇲🇽 Español</a>
+            <a href="index-en.html" className="text-slate-400 hover:text-white text-sm font-medium transition-colors">🇺🇸 English</a>
+            <span className="bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-bold px-3 py-1 rounded-full tracking-wider uppercase">Live Calculator</span>
+          </div>
+        </div>
+      </nav>
+
+      <div className="max-w-7xl mx-auto px-6 py-8">
+
+        {/* ── VOLATILITY DISCLAIMER ── */}
+        <div className="mb-8 bg-amber-50 border-2 border-amber-400 rounded-xl px-6 py-5 flex gap-4 items-start shadow-sm">
+          <div className="text-amber-500 text-2xl flex-shrink-0 mt-0.5">⚠</div>
+          <div>
+            <div className="font-bold text-amber-800 text-sm tracking-wide uppercase mb-1">Financial Volatility Disclaimer</div>
+            <p className="text-amber-700 text-sm leading-relaxed">
+              <strong>All financial figures are estimates.</strong> Total acquisition costs are subject to high volatility based on secondhand machinery auction prices in Japan. Final costs <strong>cannot be fixed until the hammer price is secured</strong>. Ocean freight rates, customs duties, and inland logistics costs may vary. This tool is for planning purposes only.
+            </p>
+          </div>
+        </div>
+
+        {/* ── PAGE TITLE ── */}
+        <div className="mb-8">
+          <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mb-2">
+            Inland Logistics & Cost Calculator
+          </h1>
+          <p className="text-slate-500 text-base">
+            Yokohama, Japan → Manzanillo, Mexico → Inland Destination · 40'HC Container · Mini Excavators
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+
+          {/* ── LEFT COLUMN: INPUTS ── */}
+          <div className="xl:col-span-1 space-y-5">
+
+            {/* Container Count */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Container Count</div>
+                  <div className="text-slate-600 text-xs">40'HC · Yokohama → Manzanillo</div>
+                </div>
+                <div className="bg-navy-900 bg-slate-900 text-white text-2xl font-black w-14 h-14 rounded-xl flex items-center justify-center shadow">
+                  {containers}
+                </div>
+              </div>
+              <input
+                type="range" min="1" max="20" value={containers}
+                onChange={e => setContainers(+e.target.value)}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                <span>1</span><span>10</span><span>20</span>
+              </div>
+            </div>
+
+            {/* Excavators per Container */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Excavators / Container</div>
+                  <div className="text-slate-600 text-xs">Mini excavators per 40'HC unit</div>
+                </div>
+                <div className="bg-slate-900 text-white text-2xl font-black w-14 h-14 rounded-xl flex items-center justify-center shadow">
+                  {excsPerCont}
+                </div>
+              </div>
+              <input
+                type="range" min="1" max="4" value={excsPerCont}
+                onChange={e => setExcsPerCont(+e.target.value)}
+                className="w-full"
+              />
+              <div className="flex justify-between text-xs text-slate-400 mt-1">
+                <span>1</span><span>2</span><span>3</span><span>4</span>
+              </div>
+            </div>
+
+            {/* Total Excavators — Auto Calculated */}
+            <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-xl p-6 shadow-md text-white">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Total Excavators</div>
+              <div className="flex items-end gap-3 mb-1">
+                <div className="text-5xl font-black text-white">{totalExcavators}</div>
+                <div className="text-slate-400 text-sm mb-2">units</div>
+              </div>
+              <div className="text-slate-400 text-xs">{containers} containers × {excsPerCont} excavators</div>
+              <div className="mt-4 pt-4 border-t border-slate-700">
+                <div className="text-xs text-slate-400 mb-1">Mock auction value (est.)</div>
+                <div className="text-amber-400 font-bold text-lg">{fmtK(costs.auctionTotal)} USD</div>
+              </div>
+            </div>
+
+            {/* Destination */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Inland Destination</div>
+              <div className="space-y-2">
+                {DESTINATIONS.map(d => {
+                  const rs = RISK_COLORS[d.risk];
+                  const active = destId === d.id;
+                  return (
+                    <button
+                      key={d.id}
+                      onClick={() => setDestId(d.id)}
+                      className={`w-full flex items-center justify-between px-4 py-3 rounded-lg border-2 transition-all text-left ${
+                        active ? 'border-slate-800 bg-slate-50' : 'border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${rs.dot}`}></div>
+                        <span className={`font-semibold text-sm ${active ? 'text-slate-900' : 'text-slate-600'}`}>{d.label}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">{d.km} km</span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${rs.bg} ${rs.text}`}>{rs.label}</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Security Protocol */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-3">Inland Security Protocol</div>
+              <div className="space-y-3">
+                <label className={`flex items-start gap-3 p-4 rounded-lg border-2 cursor-pointer transition-all ${security === 'A' ? 'border-red-300 bg-red-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <input type="radio" name="security" value="A" checked={security === 'A'} onChange={() => setSecurity('A')} className="mt-0.5 accent-red-500"/>
+                  <div>
+                    <div className="font-bold text-sm text-slate-800">Option A: Armed Escort</div>
+                    <div className="text-xs text-slate-500 mt-0.5">Custodia Armada · {fmt(ESCORT_BASE)} / container</div>
+                  </div>
+                </label>
+                <label className={`flex items-start gap-3 p-4 rounded-lg border-2 cursor-pointer transition-all ${security === 'B' ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                  <input type="radio" name="security" value="B" checked={security === 'B'} onChange={() => setSecurity('B')} className="mt-0.5 accent-emerald-500"/>
+                  <div>
+                    <div className="font-bold text-sm text-slate-800">Option B: Full Cargo Insurance</div>
+                    <div className="text-xs text-slate-500 mt-0.5">Seguro sobre valor total · 1.2% of CIF</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+          </div>
+
+          {/* ── RIGHT COLUMNS: RESULTS ── */}
+          <div className="xl:col-span-2 space-y-5">
+
+            {/* KPI Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {[
+                { label: 'Total Units',          value: totalExcavators,        suffix: 'excavators', color: 'text-slate-900' },
+                { label: 'Landed Cost / Unit',   value: fmt(costs.landedPerUnit), suffix: 'USD',      color: 'text-blue-700' },
+                { label: 'Total Capital at Risk', value: fmtK(costs.auctionTotal), suffix: 'USD est.', color: 'text-amber-600' },
+                { label: 'Security Cost',         value: fmt(costs.securityCost), suffix: security==='A'?'armed escort':'insurance', color: security==='A'?'text-red-600':'text-emerald-600' },
+              ].map((kpi, i) => (
+                <div key={i} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+                  <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">{kpi.label}</div>
+                  <div className={`text-2xl font-black ${kpi.color}`}>{kpi.value}</div>
+                  <div className="text-xs text-slate-400 mt-1">{kpi.suffix}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Cost Breakdown */}
+            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-5">
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">Cost Breakdown — Per Operation</div>
+                <div className={`text-xs font-bold px-3 py-1 rounded-full border ${riskStyle.bg} ${riskStyle.border} ${riskStyle.text}`}>
+                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${riskStyle.dot} mr-1.5`}></span>
+                  {dest.label} · {riskStyle.label}
+                </div>
+              </div>
+
+              <div className="space-y-0 divide-y divide-slate-100">
+                {[
+                  { label: 'Auction Price (mock)',        val: costs.auctionTotal,   note: `${totalExcavators} units × ${fmt(MOCK_AUCTION_PRICE)}` },
+                  { label: 'Ocean Freight (40\'HC FCL)',  val: costs.oceanTotal,     note: `${containers} containers × ${fmt(OCEAN_FREIGHT_PER_CONTAINER)}` },
+                  { label: 'IGI Import Duty (5%)',        val: costs.igi,            note: 'On CIF value' },
+                  { label: 'DTA Processing Fee',          val: costs.dta,            note: '0.008% of CIF' },
+                  { label: 'Customs Broker',              val: costs.brokerTotal,    note: `${containers} × ${fmt(BROKER_FEE)}` },
+                  { label: 'Port Handling + THC',         val: costs.portTotal,      note: `${containers} × ${fmt(PORT_HANDLING)}` },
+                  { label: `Inland Freight → ${dest.label}`, val: costs.freightTotal, note: `${dest.km} km · ${containers} containers` },
+                  { label: security === 'A' ? 'Armed Escort (Custodia Armada)' : 'Cargo Insurance (All-Risk)', val: costs.securityCost, note: security === 'A' ? `${containers} × ${fmt(ESCORT_BASE)}` : '1.2% of CIF value', highlight: true },
+                ].map((row, i) => (
+                  <div key={i} className={`flex items-center justify-between py-3 ${row.highlight ? (security==='A'?'bg-red-50 px-3 -mx-3 rounded':'bg-emerald-50 px-3 -mx-3 rounded') : ''}`}>
+                    <div>
+                      <span className={`text-sm font-semibold ${row.highlight ? (security==='A'?'text-red-700':'text-emerald-700') : 'text-slate-700'}`}>{row.label}</span>
+                      <span className="text-xs text-slate-400 ml-2">{row.note}</span>
+                    </div>
+                    <span className={`font-bold text-sm ${row.highlight ? (security==='A'?'text-red-600':'text-emerald-600') : 'text-slate-900'}`}>{fmt(row.val)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 pt-4 border-t-2 border-slate-900 flex items-center justify-between">
+                <div>
+                  <div className="font-black text-slate-900 text-base">Total Landed Cost</div>
+                  <div className="text-xs text-slate-400">Excl. IVA (creditable) · {fmtK(costs.iva)} USD IVA</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-3xl font-black text-slate-900">{fmt(costs.totalBeforeIva)}</div>
+                  <div className="text-xs text-slate-400 font-medium">USD</div>
+                </div>
+              </div>
+
+              <div className="mt-3 bg-slate-50 rounded-lg p-3 flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">Landed Cost per Excavator</span>
+                <span className="text-base font-black text-blue-700">{fmt(costs.landedPerUnit)} <span className="text-xs font-normal text-slate-400">USD / unit</span></span>
+              </div>
+            </div>
+
+            {/* AI Recommendation Panel */}
+            <div className={`fade-in rounded-xl border-2 p-6 shadow-sm ${security === 'A' ? 'bg-red-50 border-red-300' : 'bg-emerald-50 border-emerald-300'}`}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`text-2xl`}>{security === 'A' ? '⚠️' : '✅'}</div>
+                <div>
+                  <div className={`text-xs font-bold uppercase tracking-widest mb-0.5 ${security === 'A' ? 'text-red-600' : 'text-emerald-600'}`}>
+                    Risk Assessment — {security === 'A' ? 'Elevated Exposure' : 'Recommended Strategy'}
+                  </div>
+                  <div className={`font-extrabold text-base ${security === 'A' ? 'text-red-800' : 'text-emerald-800'}`}>
+                    {security === 'A' ? 'Option A: Armed Escort — Caution Advised' : 'Option B: Full Cargo Insurance — Recommended'}
+                  </div>
+                </div>
+              </div>
+
+              {security === 'A' ? (
+                <div className="space-y-3 text-sm text-red-800 leading-relaxed">
+                  <p>
+                    While armed escorts (Custodia Armada) provide a visible physical deterrent, this strategy introduces a significant and often overlooked operational risk on Mexican federal highways: <strong>high visibility actively signals to organized criminal networks that high-value cargo is in transit.</strong>
+                  </p>
+                  <p>
+                    Armed convoys are a well-documented target profile for cargo theft syndicates operating in Colima, Michoacán, Jalisco, and the Bajío corridors. The presence of armed personnel creates a tactical confrontation scenario that escalates the probability of coordinated interception attempts — placing both the cargo <strong>and the transport crew at direct physical risk.</strong>
+                  </p>
+                  <p className="font-semibold border-l-4 border-red-400 pl-3">
+                    For {dest.label} ({dest.km} km, {RISK_COLORS[dest.risk].label}): the {fmt(costs.securityCost)} escort cost does not eliminate the risk of total cargo loss — it may amplify it. Review your operational risk tolerance before proceeding.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 text-sm text-emerald-800 leading-relaxed">
+                  <p>
+                    Full cargo insurance (Seguro sobre valor total) is the <strong>strongly recommended strategy</strong> for high-value machinery imports on Mexican inland routes. This approach adopts a deliberately low-profile operational posture: standard freight carriers, no visible security markings, no armed personnel — nothing that signals the cargo's value to third parties on the highway.
+                  </p>
+                  <p>
+                    This strategy <strong>completely protects the imported capital value</strong> in the event of theft, accident, or force majeure, while maintaining maximum operational discretion. Insurers specializing in heavy cargo provide All-Risk coverage with rapid claims processing for documented commercial imports.
+                  </p>
+                  <p className="font-semibold border-l-4 border-emerald-400 pl-3">
+                    For {dest.label} ({dest.km} km, {RISK_COLORS[dest.risk].label}): the {fmt(costs.securityCost)} insurance premium provides full coverage on {fmt(costs.cifValue)} of declared CIF value — an efficient risk transfer at {((costs.securityCost / costs.cifValue) * 100).toFixed(2)}% of total cargo value.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Route Summary Card */}
+            <div className="bg-slate-900 rounded-xl p-6 text-white">
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4">Route Summary</div>
+              <div className="flex items-center gap-0 mb-5">
+                {['🏭 Yokohama', '🚢 Pacific (28d)', '⚓ Manzanillo', `🚛 ${dest.label}`].map((step, i, arr) => (
+                  <React.Fragment key={i}>
+                    <div className="text-center flex-shrink-0">
+                      <div className="text-xs font-semibold text-white whitespace-nowrap">{step}</div>
+                    </div>
+                    {i < arr.length - 1 && (
+                      <div className="flex-1 h-px bg-gradient-to-r from-slate-600 to-amber-500 mx-2 min-w-4"></div>
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {[
+                  { label: 'Containers',  val: containers },
+                  { label: 'Excavators', val: totalExcavators },
+                  { label: 'Inland km',  val: `${dest.km} km` },
+                  { label: 'Protocol',   val: security === 'A' ? 'Armed Escort' : 'Insurance' },
+                ].map((item, i) => (
+                  <div key={i} className="bg-slate-800 rounded-lg p-3">
+                    <div className="text-xs text-slate-400 mb-1">{item.label}</div>
+                    <div className="font-bold text-white">{item.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* FOOTER */}
+        <div className="mt-10 pt-6 border-t border-slate-200 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-slate-400">
+          <div className="flex items-center gap-2">
+            <Logo size={24}/>
+            <span className="font-semibold text-slate-600">Japón Compacto</span>
+            <span>· Import Logistics Platform · B2B Only</span>
+          </div>
+          <div className="flex gap-6">
+            <span>📧 contacto@japoncompacto.com</span>
+            <span>📱 +1 587 723 6646</span>
+            <span>🏢 Monterrey, Nuevo León</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Dashboard/>);
+</script>
+</body>
+</html>
